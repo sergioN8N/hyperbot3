@@ -1,129 +1,139 @@
-{
-  "nodes": [
-    {
-      "id": "1",
-      "parameters": {},
-      "name": "Telegram Trigger",
-      "type": "n8n-nodes-base.telegramTrigger",
-      "typeVersion": 1,
-      "position": [200, 200]
-    },
-    {
-      "id": "2",
-      "parameters": {
-        "format": "resolved",
-        "options": {}
-      },
-      "name": "Gmail Trigger (IMAP Email)",
-      "type": "n8n-nodes-base.imapEmailTrigger",
-      "typeVersion": 1,
-      "position": [200, 400]
-    },
-    {
-      "id": "3",
-      "parameters": {
-        "functionCode": "return [{\n  json: {\n    message: $json.text || $json.textPlain,\n    channel: $node[\"Telegram Trigger\"] ? \"Telegram\" : \"Gmail\",\n    sender: $json.from || $json.from.email,\n    timestamp: new Date().toISOString()\n  }\n}];"
-      },
-      "name": "Unificar mensaje",
-      "type": "n8n-nodes-base.function",
-      "typeVersion": 1,
-      "position": [400, 300]
-    },
-    {
-      "id": "4",
-      "parameters": {
-        "model": "gpt-3.5-turbo",
-        "temperature": 0.6,
-        "messages": [
-          {
-            "role": "user",
-            "content": "Eres un asistente virtual de atención al cliente y ventas. Tu tarea es analizar el siguiente mensaje y clasificarlo en una de las siguientes categorías: 'venta', 'consulta', 'queja', 'spam'. Luego, genera una respuesta profesional y amable. Devuelve la salida en formato JSON:\n\nMensaje: {{ $json.message }}\n\nCanal: {{ $json.channel }}\n\nSalida esperada:\n{\n  \"clasificacion\": \"consulta\",\n  \"respuesta\": \"¡Hola! Gracias por contactarnos. ¿En qué podemos ayudarte hoy?\"\n}"
-          }
-        ]
-      },
-      "name": "Clasificación AI",
-      "type": "n8n-nodes-base.openai",
-      "typeVersion": 1,
-      "position": [600, 300]
-    },
-    {
-      "id": "5",
-      "parameters": {
-        "propertyName": "clasificacion",
-        "dataType": "string",
-        "conditions": {
-          "string": [
-            {
-              "value1": "={{ $json.clasificacion }}",
-              "operation": "contains",
-              "value2": "venta"
+from pathlib import Path
+import json
+
+# Workflow corregido unificando respuesta de Gmail en un solo nodo
+workflow = {
+    "nodes": [
+        {
+            "id": "1",
+            "name": "Activador de Gmail",
+            "type": "n8n-nodes-base.gmailTrigger",
+            "typeVersion": 1,
+            "position": [200, 300],
+            "parameters": {
+                "format": "resolved"
             }
-          ]
-        }
-      },
-      "name": "Es venta?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 1,
-      "position": [800, 200]
-    },
-    {
-      "id": "6",
-      "parameters": {
-        "documentName": "={{ $json.channel }}/{{ $json.clasificacion }}",
-        "content": "Mensaje: {{ $json.message }}\nRespuesta: {{ $json.respuesta }}\nRemitente: {{ $json.sender }}\nFecha: {{ $json.timestamp }}",
-        "options": {}
-      },
-      "name": "Guardar en Google Docs",
-      "type": "n8n-nodes-base.googleDocs",
-      "typeVersion": 1,
-      "position": [1000, 300]
-    },
-    {
-      "id": "7",
-      "parameters": {
-        "chatId": "={{ $json.sender }}",
-        "text": "={{ $json.respuesta }}"
-      },
-      "name": "Responder Telegram",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1,
-      "position": [1200, 200]
-    },
-    {
-      "id": "8",
-      "parameters": {
-        "fromEmail": "tu_correo@gmail.com",
-        "toEmail": "={{ $json.sender }}",
-        "subject": "Re: Tu mensaje",
-        "text": "={{ $json.respuesta }}"
-      },
-      "name": "Responder Gmail",
-      "type": "n8n-nodes-base.emailSend",
-      "typeVersion": 1,
-      "position": [1200, 400]
-    }
-  ],
-  "connections": {
-    "Telegram Trigger": {
-      "main": [[{ "node": "Unificar mensaje", "type": "main", "index": 0 }]]
-    },
-    "Gmail Trigger (IMAP Email)": {
-      "main": [[{ "node": "Unificar mensaje", "type": "main", "index": 0 }]]
-    },
-    "Unificar mensaje": {
-      "main": [[{ "node": "Clasificación AI", "type": "main", "index": 0 }]]
-    },
-    "Clasificación AI": {
-      "main": [
-        [{ "node": "Es venta?", "type": "main", "index": 0 }],
-        [{ "node": "Guardar en Google Docs", "type": "main", "index": 0 }]
-      ]
-    },
-    "Es venta?": {
-      "main": [
-        [{ "node": "Responder Telegram", "type": "main", "index": 0 }],
-        [{ "node": "Responder Gmail", "type": "main", "index": 0 }]
-      ]
-    }
+        },
+        {
+            "id": "2",
+            "name": "Unificar mensaje",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [400, 300],
+            "parameters": {
+                "functionCode": """return [{
+  json: {
+    message: $json.textPlain || $json.text,
+    channel: "Gmail",
+    sender: $json.from.email,
+    subject: $json.subject,
+    id: $json.id,
+    respuesta: "",
+    timestamp: new Date().toISOString()
   }
+}];"""
+            }
+        },
+        {
+            "id": "3",
+            "name": "OpenAI",
+            "type": "n8n-nodes-base.openai",
+            "typeVersion": 1,
+            "position": [600, 300],
+            "parameters": {
+                "model": "gpt-3.5-turbo",
+                "temperature": 0.6,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": """Eres un asistente virtual de atención al cliente y ventas. Tu tarea es analizar el siguiente mensaje y clasificarlo en una de las siguientes categorías: 'venta', 'consulta', 'queja', 'spam'. Luego, genera una respuesta profesional y amable. Devuelve la salida en formato JSON:
+
+Mensaje: {{ $json.message }}
+Canal: {{ $json.channel }}
+
+Salida esperada:
+{
+  "clasificacion": "consulta",
+  "respuesta": "¡Hola! Gracias por contactarnos. ¿En qué podemos ayudarte hoy?"
+}"""
+                    }
+                ]
+            }
+        },
+        {
+            "id": "4",
+            "name": "Guardar respuesta",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [800, 300],
+            "parameters": {
+                "functionCode": """const output = JSON.parse($json.choices[0].message.content);
+return [{
+  json: {
+    ...$json,
+    clasificacion: output.clasificacion,
+    respuesta: output.respuesta
+  }
+}];"""
+            }
+        },
+        {
+            "id": "5",
+            "name": "Switch canal",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [1000, 300],
+            "parameters": {
+                "conditions": {
+                    "string": [
+                        {
+                            "value1": "={{ $json.channel }}",
+                            "operation": "equals",
+                            "value2": "Gmail"
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "id": "6",
+            "name": "Responder Gmail",
+            "type": "n8n-nodes-base.gmail",
+            "typeVersion": 1,
+            "position": [1200, 300],
+            "parameters": {
+                "operation": "send",
+                "toEmail": "={{ $json.sender }}",
+                "subject": "Re: {{ $json.subject }}",
+                "text": "={{ $json.respuesta }}"
+            }
+        }
+    ],
+    "connections": {
+        "Activador de Gmail": {
+            "main": [[{ "node": "Unificar mensaje", "type": "main", "index": 0 }]]
+        },
+        "Unificar mensaje": {
+            "main": [[{ "node": "OpenAI", "type": "main", "index": 0 }]]
+        },
+        "OpenAI": {
+            "main": [[{ "node": "Guardar respuesta", "type": "main", "index": 0 }]]
+        },
+        "Guardar respuesta": {
+            "main": [[{ "node": "Switch canal", "type": "main", "index": 0 }]]
+        },
+        "Switch canal": {
+            "main": [[{ "node": "Responder Gmail", "type": "main", "index": 0 }]]
+        }
+    },
+    "active": False,
+    "settings": {},
+    "name": "Workflow Gmail Unificado",
+    "tags": []
 }
+
+# Guardar archivo JSON
+workflow_path = Path("/mnt/data/Workflow_Gmail_Unificado.json")
+workflow_path.write_text(json.dumps(workflow, indent=2), encoding="utf-8")
+
+workflow_path.name
