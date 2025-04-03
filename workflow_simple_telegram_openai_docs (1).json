@@ -1,41 +1,51 @@
 from pathlib import Path
 import json
 
-# Workflow corregido unificando respuesta de Gmail en un solo nodo
+# Workflow multicanal con Gmail + Telegram, respuesta automática + guardado en Google Docs
 workflow = {
+    "name": "Workflow Multicanal - Gmail y Telegram",
     "nodes": [
         {
             "id": "1",
-            "name": "Activador de Gmail",
+            "name": "Gmail Trigger",
             "type": "n8n-nodes-base.gmailTrigger",
             "typeVersion": 1,
-            "position": [200, 300],
+            "position": [200, 200],
             "parameters": {
                 "format": "resolved"
             }
         },
         {
             "id": "2",
+            "name": "Telegram Trigger",
+            "type": "n8n-nodes-base.telegramTrigger",
+            "typeVersion": 1,
+            "position": [200, 400],
+            "parameters": {
+                "updates": ["message"]
+            }
+        },
+        {
+            "id": "3",
             "name": "Unificar mensaje",
             "type": "n8n-nodes-base.function",
             "typeVersion": 1,
             "position": [400, 300],
             "parameters": {
-                "functionCode": """return [{
+                "functionCode": """const isTelegram = $node[\"Telegram Trigger\"] !== undefined;
+return [{
   json: {
-    message: $json.textPlain || $json.text,
-    channel: "Gmail",
-    sender: $json.from.email,
-    subject: $json.subject,
-    id: $json.id,
-    respuesta: "",
+    message: isTelegram ? $node[\"Telegram Trigger\"].json.message.text : $node[\"Gmail Trigger\"].json.textPlain || $node[\"Gmail Trigger\"].json.text,
+    channel: isTelegram ? "Telegram" : "Gmail",
+    sender: isTelegram ? $node[\"Telegram Trigger\"].json.message.chat.id : $node[\"Gmail Trigger\"].json.from.email,
+    subject: isTelegram ? "" : $node[\"Gmail Trigger\"].json.subject,
     timestamp: new Date().toISOString()
   }
 }];"""
             }
         },
         {
-            "id": "3",
+            "id": "4",
             "name": "OpenAI",
             "type": "n8n-nodes-base.openai",
             "typeVersion": 1,
@@ -46,94 +56,93 @@ workflow = {
                 "messages": [
                     {
                         "role": "user",
-                        "content": """Eres un asistente virtual de atención al cliente y ventas. Tu tarea es analizar el siguiente mensaje y clasificarlo en una de las siguientes categorías: 'venta', 'consulta', 'queja', 'spam'. Luego, genera una respuesta profesional y amable. Devuelve la salida en formato JSON:
-
-Mensaje: {{ $json.message }}
-Canal: {{ $json.channel }}
-
-Salida esperada:
-{
-  "clasificacion": "consulta",
-  "respuesta": "¡Hola! Gracias por contactarnos. ¿En qué podemos ayudarte hoy?"
-}"""
+                        "content": """Eres un asistente virtual de atención al cliente y ventas. Tu tarea es analizar el siguiente mensaje y clasificarlo en una de las siguientes categorías: 'venta', 'consulta', 'queja', 'spam'. Luego, genera una respuesta profesional y amable. Devuelve la salida en formato JSON:\n\nMensaje: {{ $json.message }}\nCanal: {{ $json.channel }}\n\nSalida esperada:\n{\n  \"clasificacion\": \"consulta\",\n  \"respuesta\": \"¡Hola! Gracias por contactarnos. ¿En qué podemos ayudarte hoy?\"\n}"""
                     }
                 ]
             }
         },
         {
-            "id": "4",
-            "name": "Guardar respuesta",
+            "id": "5",
+            "name": "Procesar respuesta",
             "type": "n8n-nodes-base.function",
             "typeVersion": 1,
             "position": [800, 300],
             "parameters": {
-                "functionCode": """const output = JSON.parse($json.choices[0].message.content);
+                "functionCode": """const salida = JSON.parse($json.choices[0].message.content);
 return [{
   json: {
     ...$json,
-    clasificacion: output.clasificacion,
-    respuesta: output.respuesta
+    clasificacion: salida.clasificacion,
+    respuesta: salida.respuesta
   }
 }];"""
             }
         },
         {
-            "id": "5",
-            "name": "Switch canal",
-            "type": "n8n-nodes-base.if",
-            "typeVersion": 1,
-            "position": [1000, 300],
-            "parameters": {
-                "conditions": {
-                    "string": [
-                        {
-                            "value1": "={{ $json.channel }}",
-                            "operation": "equals",
-                            "value2": "Gmail"
-                        }
-                    ]
-                }
-            }
-        },
-        {
             "id": "6",
-            "name": "Responder Gmail",
+            "name": "Enviar por Gmail",
             "type": "n8n-nodes-base.gmail",
             "typeVersion": 1,
-            "position": [1200, 300],
+            "position": [1000, 200],
             "parameters": {
                 "operation": "send",
                 "toEmail": "={{ $json.sender }}",
                 "subject": "Re: {{ $json.subject }}",
                 "text": "={{ $json.respuesta }}"
             }
+        },
+        {
+            "id": "7",
+            "name": "Enviar por Telegram",
+            "type": "n8n-nodes-base.telegram",
+            "typeVersion": 1,
+            "position": [1000, 400],
+            "parameters": {
+                "chatId": "={{ $json.sender }}",
+                "text": "={{ $json.respuesta }}"
+            }
+        },
+        {
+            "id": "8",
+            "name": "Guardar en Google Docs",
+            "type": "n8n-nodes-base.googleDocs",
+            "typeVersion": 1,
+            "position": [1200, 300],
+            "parameters": {
+                "documentName": "={{ $json.channel }}/{{ $json.clasificacion }} - {{ $json.timestamp }}",
+                "content": "Canal: {{ $json.channel }}\nClasificación: {{ $json.clasificacion }}\nMensaje: {{ $json.message }}\nRespuesta: {{ $json.respuesta }}\nRemitente: {{ $json.sender }}\nFecha: {{ $json.timestamp }}",
+                "options": {}
+            }
         }
     ],
     "connections": {
-        "Activador de Gmail": {
+        "Gmail Trigger": {
+            "main": [[{ "node": "Unificar mensaje", "type": "main", "index": 0 }]]
+        },
+        "Telegram Trigger": {
             "main": [[{ "node": "Unificar mensaje", "type": "main", "index": 0 }]]
         },
         "Unificar mensaje": {
             "main": [[{ "node": "OpenAI", "type": "main", "index": 0 }]]
         },
         "OpenAI": {
-            "main": [[{ "node": "Guardar respuesta", "type": "main", "index": 0 }]]
+            "main": [[{ "node": "Procesar respuesta", "type": "main", "index": 0 }]]
         },
-        "Guardar respuesta": {
-            "main": [[{ "node": "Switch canal", "type": "main", "index": 0 }]]
-        },
-        "Switch canal": {
-            "main": [[{ "node": "Responder Gmail", "type": "main", "index": 0 }]]
+        "Procesar respuesta": {
+            "main": [
+                [{ "node": "Enviar por Gmail", "type": "main", "index": 0 }],
+                [{ "node": "Enviar por Telegram", "type": "main", "index": 0 }],
+                [{ "node": "Guardar en Google Docs", "type": "main", "index": 0 }]
+            ]
         }
     },
     "active": False,
     "settings": {},
-    "name": "Workflow Gmail Unificado",
     "tags": []
 }
 
-# Guardar archivo JSON
-workflow_path = Path("/mnt/data/Workflow_Gmail_Unificado.json")
-workflow_path.write_text(json.dumps(workflow, indent=2), encoding="utf-8")
+# Guardar como archivo JSON
+file_path = Path("/mnt/data/Workflow_Multicanal_Gmail_Telegram_GDocs.json")
+file_path.write_text(json.dumps(workflow, indent=2), encoding="utf-8")
 
-workflow_path.name
+file_path.name
