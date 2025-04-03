@@ -1,159 +1,200 @@
-{
-  "name": "Bot Telegram + OpenAI (Versi\u00f3n de Prueba)",
-  "nodes": [
-    {
-      "parameters": {
-        "updates": [
-          "message"
-        ]
-      },
-      "name": "Telegram Trigger",
-      "type": "n8n-nodes-base.telegramTrigger",
-      "typeVersion": 1,
-      "position": [
-        250,
-        300
-      ]
-    },
-    {
-      "parameters": {
-        "functionCode": "\nconst message = $json.message.text;\nconst userId = $json.message.chat.id;\nconst userName = $json.message.from.first_name || \"Desconocido\";\n\nreturn [{\n  message,\n  userId,\n  userName\n}];\n"
-      },
-      "name": "Preparar mensaje",
-      "type": "n8n-nodes-base.function",
-      "typeVersion": 1,
-      "position": [
-        450,
-        300
-      ]
-    },
-    {
-      "parameters": {
-        "prompt": "Eres un asistente de ventas amable, claro y profesional. Responde al siguiente mensaje considerando t\u00e9cnicas de ventas (AIDA), y si es una oportunidad de venta, orienta a agendar una llamada, enviar un PDF, o continuar por este medio.\n\nMensaje del usuario:\n{{ $json[\"message\"] }}\n\nServicios disponibles:\n1. Desarrollo Web a medida.\n2. Automatizaci\u00f3n con n8n.\n3. Consultor\u00eda en Productividad Digital.\n\nResponde de forma persuasiva pero sin sonar forzado.\n",
-        "temperature": 0.7,
-        "maxTokens": 300
-      },
-      "name": "OpenAI - Generar Respuesta",
-      "type": "n8n-nodes-base.openai",
-      "typeVersion": 1,
-      "position": [
-        700,
-        300
-      ],
-      "credentials": {
-        "openAiApi": {
-          "id": "1",
-          "name": "OpenAI Account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "functionCode": "\nconst respuesta = $node[\"OpenAI - Generar Respuesta\"].json.choices[0].text;\nreturn [{\n  ...$json,\n  respuesta\n}];\n"
-      },
-      "name": "Adjuntar respuesta",
-      "type": "n8n-nodes-base.function",
-      "typeVersion": 1,
-      "position": [
-        900,
-        300
-      ]
-    },
-    {
-      "parameters": {
-        "chatId": "={{$json[\"userId\"]}}",
-        "text": "={{$json[\"respuesta\"]}}"
-      },
-      "name": "Enviar a Telegram",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1,
-      "position": [
-        1100,
-        200
-      ],
-      "credentials": {
-        "telegramApi": {
-          "id": "2",
-          "name": "Telegram Bot"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "authentication": "oAuth2",
-        "documentName": "Conversacion_Telegram_{{$json[\"userId\"]}}",
-        "content": "\n\ud83d\udd52 Fecha: {{$now}}\n\ud83d\udc64 Usuario: {{$json[\"userName\"]}}\n\ud83d\udcac Mensaje: {{$json[\"message\"]}}\n\ud83e\udd16 Respuesta: {{$json[\"respuesta\"]}}\n\n---\n"
-      },
-      "name": "Guardar en Google Docs",
-      "type": "n8n-nodes-base.googleDocs",
-      "typeVersion": 1,
-      "position": [
-        1100,
-        400
-      ],
-      "credentials": {
-        "googleDocsOAuth2Api": {
-          "id": "3",
-          "name": "Google Docs Account"
-        }
-      }
-    }
-  ],
-  "connections": {
-    "Telegram Trigger": {
-      "main": [
-        [
-          {
-            "node": "Preparar mensaje",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Preparar mensaje": {
-      "main": [
-        [
-          {
-            "node": "OpenAI - Generar Respuesta",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "OpenAI - Generar Respuesta": {
-      "main": [
-        [
-          {
-            "node": "Adjuntar respuesta",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Adjuntar respuesta": {
-      "main": [
-        [
-          {
-            "node": "Enviar a Telegram",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Guardar en Google Docs",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    }
-  },
-  "settings": {
-    "timezone": "UTC"
-  },
-  "active": false
+from datetime import datetime
+import json
+
+# Nuevo workflow completo con Gmail + Telegram + OpenAI + Google Docs
+workflow_multicanal = {
+    "name": "Bot Multicanal Telegram + Gmail + OpenAI + Docs",
+    "nodes": [
+        # Telegram Trigger
+        {
+            "parameters": {
+                "updates": ["message"]
+            },
+            "name": "Telegram Trigger",
+            "type": "n8n-nodes-base.telegramTrigger",
+            "typeVersion": 1,
+            "position": [250, 100]
+        },
+        # Gmail Trigger
+        {
+            "parameters": {},
+            "name": "Gmail Trigger",
+            "type": "n8n-nodes-base.gmailTrigger",
+            "typeVersion": 1,
+            "position": [250, 300]
+        },
+        # Identificar canal
+        {
+            "parameters": {
+                "functionCode": """
+const telegramData = $node["Telegram Trigger"].json?.message;
+const gmailData = $node["Gmail Trigger"].json?.from;
+
+let canal, mensaje, userId, userName;
+
+if (telegramData) {
+  canal = "Telegram";
+  mensaje = telegramData.text;
+  userId = telegramData.chat.id;
+  userName = telegramData.from.first_name || "Desconocido";
+} else {
+  canal = "Gmail";
+  mensaje = $node["Gmail Trigger"].json.text;
+  userId = $node["Gmail Trigger"].json.from.email;
+  userName = $node["Gmail Trigger"].json.from.name || "Desconocido";
 }
+
+return [{
+  canal,
+  mensaje,
+  userId,
+  userName
+}];
+"""
+            },
+            "name": "Identificar canal",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [450, 200]
+        },
+        # OpenAI
+        {
+            "parameters": {
+                "prompt": """Eres un asistente de ventas amable, claro y profesional. Responde al siguiente mensaje considerando técnicas de ventas (AIDA), y si es una oportunidad de venta, orienta a agendar una llamada, enviar un PDF, o continuar por este medio.
+
+Mensaje del usuario:
+{{ $json["mensaje"] }}
+
+Servicios disponibles:
+1. Desarrollo Web a medida.
+2. Automatización con n8n.
+3. Consultoría en Productividad Digital.
+
+Responde de forma persuasiva pero sin sonar forzado.
+""",
+                "temperature": 0.7,
+                "maxTokens": 300
+            },
+            "name": "OpenAI - Generar Respuesta",
+            "type": "n8n-nodes-base.openai",
+            "typeVersion": 1,
+            "position": [700, 200],
+            "credentials": {
+                "openAiApi": {
+                    "id": "1",
+                    "name": "OpenAI Account"
+                }
+            }
+        },
+        # Adjuntar respuesta
+        {
+            "parameters": {
+                "functionCode": """
+const respuesta = $node["OpenAI - Generar Respuesta"].json.choices[0].text;
+return [{
+  ...$json,
+  respuesta
+}];
+"""
+            },
+            "name": "Adjuntar respuesta",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [900, 200]
+        },
+        # Google Docs
+        {
+            "parameters": {
+                "authentication": "oAuth2",
+                "documentName": "Conversacion_{{$json[\"userId\"]}}",
+                "content": """
+🕒 Fecha: {{$now}}
+📡 Canal: {{$json["canal"]}}
+👤 Usuario: {{$json["userName"]}}
+💬 Mensaje: {{$json["mensaje"]}}
+🤖 Respuesta: {{$json["respuesta"]}}
+
+---
+"""
+            },
+            "name": "Guardar en Google Docs",
+            "type": "n8n-nodes-base.googleDocs",
+            "typeVersion": 1,
+            "position": [1100, 350],
+            "credentials": {
+                "googleDocsOAuth2Api": {
+                    "id": "3",
+                    "name": "Google Docs Account"
+                }
+            }
+        },
+        # Enviar a Telegram
+        {
+            "parameters": {
+                "chatId": "={{$json[\"userId\"]}}",
+                "text": "={{$json[\"respuesta\"]}}"
+            },
+            "name": "Enviar por Telegram",
+            "type": "n8n-nodes-base.telegram",
+            "typeVersion": 1,
+            "position": [1100, 100],
+            "credentials": {
+                "telegramApi": {
+                    "id": "2",
+                    "name": "Telegram Bot"
+                }
+            }
+        },
+        # Enviar por Gmail
+        {
+            "parameters": {
+                "fromEmail": "tu-email@gmail.com",
+                "toEmail": "={{$json[\"userId\"]}}",
+                "subject": "Re: tu mensaje",
+                "text": "={{$json[\"respuesta\"]}}"
+            },
+            "name": "Enviar por Gmail",
+            "type": "n8n-nodes-base.gmail",
+            "typeVersion": 1,
+            "position": [1100, 200],
+            "credentials": {
+                "gmailOAuth2Api": {
+                    "id": "4",
+                    "name": "Gmail Account"
+                }
+            }
+        }
+    ],
+    "connections": {
+        "Telegram Trigger": {
+            "main": [[{"node": "Identificar canal", "type": "main", "index": 0}]]
+        },
+        "Gmail Trigger": {
+            "main": [[{"node": "Identificar canal", "type": "main", "index": 0}]]
+        },
+        "Identificar canal": {
+            "main": [[{"node": "OpenAI - Generar Respuesta", "type": "main", "index": 0}]]
+        },
+        "OpenAI - Generar Respuesta": {
+            "main": [[{"node": "Adjuntar respuesta", "type": "main", "index": 0}]]
+        },
+        "Adjuntar respuesta": {
+            "main": [
+                [{"node": "Guardar en Google Docs", "type": "main", "index": 0}],
+                [{"node": "Enviar por Telegram", "type": "main", "index": 0}],
+                [{"node": "Enviar por Gmail", "type": "main", "index": 0}]
+            ]
+        }
+    },
+    "settings": {
+        "timezone": "UTC"
+    },
+    "active": False
+}
+
+# Guardar JSON
+multicanal_filename = f"/mnt/data/workflow_multicanal_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+with open(multicanal_filename, "w", encoding="utf-8") as f:
+    json.dump(workflow_multicanal, f, indent=2)
+
+multicanal_filename
